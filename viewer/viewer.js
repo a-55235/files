@@ -479,7 +479,7 @@
     });
 
     // Wheel: ctrl/pinch-trackpad zooms; plain wheel flips pages when the page fits.
-    let wheelAcc = 0, lastFlip = 0;
+    let wheelAcc = 0;
     stage.addEventListener('wheel', e => {
         if (!pdf) return;
         if (e.ctrlKey || e.metaKey) {
@@ -491,16 +491,10 @@
         if (stage.scrollHeight > stage.clientHeight + 1) return; // let it scroll
         if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
         e.preventDefault();
-        const now = performance.now();
-        if (now - lastFlip < 450) {
-            if (Math.abs(e.deltaY) < 50) lastFlip = now; // swallow trackpad momentum
-            return;
-        }
         wheelAcc += e.deltaY;
         if (Math.abs(wheelAcc) >= 40) {
             wheelAcc > 0 ? next() : prev();
             wheelAcc = 0;
-            lastFlip = now;
         }
     }, { passive: false });
 
