@@ -13,6 +13,8 @@
     const PAD = 16, GAP = 0;          // must match #spread padding / #sheet gap in CSS
     const MIN_ZOOM = 0.2, MAX_ZOOM = 8;
     const MAX_PIXELS = 16e6;          // canvas size cap (iOS limit is ~16.7M)
+    const SUPERSAMPLE = 2;            // render sharper than the screen, then downscale…
+    const SUPERSAMPLE_PIXELS = 7e6;   // …but only while the canvas stays under this size
     const CACHE_PAGES = 10;           // rendered pages kept in memory
 
     const ICON = {
@@ -140,9 +142,12 @@
     const scaleFor = ns => typeof zoom === 'number' ? zoom : fitScales(ns)[zoom];
 
     // Device pixel ratio to render at for page n at CSS scale s (capped).
+    // Renders up to 2× the screen resolution (within a pixel budget) and lets the
+    // browser downscale, which keeps small text crisp at fit-to-window sizes.
     function renderRatio(n, s) {
         const { w, h } = sizeOf(n);
-        let r = s * dpr();
+        const base = s * dpr();
+        let r = Math.max(base, Math.min(base * SUPERSAMPLE, Math.sqrt(SUPERSAMPLE_PIXELS / (w * h))));
         if (w * h * r * r > MAX_PIXELS) r = Math.sqrt(MAX_PIXELS / (w * h));
         return Math.round(r * 1000) / 1000;
     }
