@@ -200,7 +200,8 @@
     function attach(n, canvas) {
         const slot = slots.find(s => s.n === n);
         if (!slot) return;
-        if (slot.el.firstChild !== canvas) slot.el.replaceChildren(canvas);
+        const old = slot.el.querySelector('canvas');
+        if (old !== canvas) old ? old.replaceWith(canvas) : slot.el.prepend(canvas);
         slot.el.classList.remove('loading');
     }
 
@@ -211,9 +212,73 @@
             el.className = 'page';
             const cached = rendered.get(n);
             if (cached) el.appendChild(cached.canvas); else el.classList.add('loading');
-            return { n, el };
+            const slot = { n, el };
+            addContentsLinks(slot);
+            return slot;
         });
         $('sheet').replaceChildren(...slots.map(s => s.el));
+    }
+
+    // ---------- clickable contents pages ----------
+
+    const linkCache = new Map(); // n -> Promise<[{x, y, w, h, target}]> in scale-1 units
+
+    // Finds contents-style lines ("Cells ........ 4") on the front pages and
+    // returns a clickable box for each, pointing at the printed page number.
+    function contentsLinks(n) {
+        if (n > OFFSET) return Promise.resolve([]);
+        if (!linkCache.has(n)) linkCache.set(n, getPage(n).then(async page => {
+            const vp = page.getViewport({ scale: 1 });
+            const { items } = await page.getTextContent();
+            const rows = new Map();
+            for (const it of items) {
+                if (!it.str.trim()) continue;
+                const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+                const col = x < vp.width / 2 ? 0 : 1;
+                const key = col + ':' + Math.round(y);
+                if (!rows.has(key)) rows.set(key, { col, y, items: [] });
+                rows.get(key).items.push({ x, w: it.width, h: it.height, str: it.str });
+            }
+            const links = [];
+            for (const col of [0, 1]) {
+                const lines = [...rows.values()].filter(r => r.col === col).sort((a, b) => a.y - b.y);
+                let pending = []; // heading / wrapped lines that belong to the next numbered line
+                for (const r of lines) {
+                    r.items.sort((a, b) => a.x - b.x);
+                    r.h = Math.max(...r.items.map(i => i.h));
+                    r.x0 = r.items[0].x;
+                    r.x1 = Math.max(...r.items.map(i => i.x + i.w));
+                    const last = pending[pending.length - 1];
+                    if (last && r.y - last.y > 1.8 * r.h) pending = [];
+                    const m = r.items.map(i => i.str).join('').match(/\.{2,}\s*(\d[\d ]*)\s*$/);
+                    if (!m) { pending.push(r); continue; }
+                    const group = [...pending, r];
+                    pending = [];
+                    const x0 = Math.min(...group.map(g => g.x0)), x1 = Math.max(...group.map(g => g.x1));
+                    const y0 = group[0].y - group[0].h, y1 = r.y + r.h * 0.3;
+                    links.push({ x: x0 - 3, y: y0, w: x1 - x0 + 6, h: y1 - y0, target: +m[1].replace(/ /g, '') });
+                }
+            }
+            return links;
+        }).catch(() => []));
+        return linkCache.get(n);
+    }
+
+    function addContentsLinks(slot) {
+        contentsLinks(slot.n).then(links => {
+            if (!links.length || !slots.includes(slot)) return;
+            const { w, h } = sizeOf(slot.n);
+            const layer = document.createElement('div');
+            layer.className = 'links';
+            for (const l of links) {
+                const a = document.createElement('a');
+                a.title = 'Go to page ' + l.target;
+                a.style.cssText = `left:${l.x / w * 100}%;top:${l.y / h * 100}%;width:${l.w / w * 100}%;height:${l.h / h * 100}%`;
+                a.onclick = () => goTo(l.target + OFFSET);
+                layer.appendChild(a);
+            }
+            slot.el.appendChild(layer);
+        });
     }
 
     function layout() {
