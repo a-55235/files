@@ -215,54 +215,153 @@
             const cached = rendered.get(n);
             if (cached) el.appendChild(cached.canvas); else el.classList.add('loading');
             const slot = { n, el };
-            addContentsLinks(slot);
+            addLinks(slot);
             return slot;
         });
         $('sheet').replaceChildren(...slots.map(s => s.el));
     }
 
-    // ---------- clickable contents pages ----------
+    // ---------- clickable contents & index pages ----------
 
-    const linkCache = new Map(); // n -> Promise<[{x, y, w, h, target}]> in scale-1 units
+    const linkCache = new Map(); // n -> Promise<[{x, y, w, h, target, label}]> in scale-1 units
 
-    // Finds contents-style lines ("Cells ........ 4") on the front pages and
-    // returns a clickable box for each, pointing at the printed page number.
-    function contentsLinks(n) {
-        if (n > OFFSET) return Promise.resolve([]);
-        if (!linkCache.has(n)) linkCache.set(n, getPage(n).then(async page => {
-            const vp = page.getViewport({ scale: 1 });
-            const { items } = await page.getTextContent();
-            const rows = new Map();
-            for (const it of items) {
-                if (!it.str.trim()) continue;
-                const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
-                const col = x < vp.width / 2 ? 0 : 1;
-                const key = col + ':' + Math.round(y);
-                if (!rows.has(key)) rows.set(key, { col, y, items: [] });
-                rows.get(key).items.push({ x, w: it.width, h: it.height, str: it.str });
+    // Groups a page's text into lines, per half-page column, top to bottom.
+    async function textLines(page) {
+        const vp = page.getViewport({ scale: 1 });
+        const { items } = await page.getTextContent();
+        const rows = new Map();
+        for (const it of items) {
+            if (!it.str.trim()) continue;
+            const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+            const col = x < vp.width / 2 ? 0 : 1;
+            const key = col + ':' + Math.round(y);
+            if (!rows.has(key)) rows.set(key, { col, y, items: [] });
+            rows.get(key).items.push({ x, w: it.width, h: it.height, str: it.str });
+        }
+        const cols = [0, 1].map(c => [...rows.values()].filter(r => r.col === c).sort((a, b) => a.y - b.y));
+        for (const r of rows.values()) {
+            r.items.sort((a, b) => a.x - b.x);
+            r.h = Math.max(...r.items.map(i => i.h));
+            r.x0 = r.items[0].x;
+            r.x1 = Math.max(...r.items.map(i => i.x + i.w));
+            r.text = r.items.map(i => i.str).join('');
+        }
+        return cols;
+    }
+
+    // Contents lines ("Cells ........ 4"): one box per entry, headings and
+    // wrapped lines joined onto the numbered line below them.
+    async function contentsLinks(page) {
+        const links = [];
+        for (const lines of await textLines(page)) {
+            let pending = [];
+            for (const r of lines) {
+                const last = pending[pending.length - 1];
+                if (last && r.y - last.y > 1.8 * r.h) pending = [];
+                const m = r.text.match(/\.{2,}\s*(\d[\d ]*)\s*$/);
+                if (!m) { pending.push(r); continue; }
+                const group = [...pending, r];
+                pending = [];
+                const x0 = Math.min(...group.map(g => g.x0)), x1 = Math.max(...group.map(g => g.x1));
+                const y0 = group[0].y - group[0].h, y1 = r.y + r.h * 0.3;
+                const target = +m[1].replace(/ /g, '');
+                links.push({ x: x0 - 3, y: y0, w: x1 - x0 + 6, h: y1 - y0, target, label: 'page ' + target, text: r.text });
             }
-            const links = [];
-            for (const col of [0, 1]) {
-                const lines = [...rows.values()].filter(r => r.col === col).sort((a, b) => a.y - b.y);
-                let pending = []; // heading / wrapped lines that belong to the next numbered line
-                for (const r of lines) {
-                    r.items.sort((a, b) => a.x - b.x);
-                    r.h = Math.max(...r.items.map(i => i.h));
-                    r.x0 = r.items[0].x;
-                    r.x1 = Math.max(...r.items.map(i => i.x + i.w));
-                    const last = pending[pending.length - 1];
-                    if (last && r.y - last.y > 1.8 * r.h) pending = [];
-                    const m = r.items.map(i => i.str).join('').match(/\.{2,}\s*(\d[\d ]*)\s*$/);
-                    if (!m) { pending.push(r); continue; }
-                    const group = [...pending, r];
-                    pending = [];
-                    const x0 = Math.min(...group.map(g => g.x0)), x1 = Math.max(...group.map(g => g.x1));
-                    const y0 = group[0].y - group[0].h, y1 = r.y + r.h * 0.3;
-                    links.push({ x: x0 - 3, y: y0, w: x1 - x0 + 6, h: y1 - y0, target: +m[1].replace(/ /g, '') });
+        }
+        return links;
+    }
+
+    const measure = document.createElement('canvas').getContext('2d');
+    measure.font = '20px sans-serif';
+
+    // Index lines ("acids 58–61, 63, 101"): one box per page number or range.
+    // If a range's dash is missing from the text ("5861"), it's split back into
+    // the most plausible range.
+    async function indexLinks(page) {
+        const maxPage = numPages - OFFSET;
+        const asRange = d => {
+            if (+d <= maxPage) return [+d, +d];
+            let best = null;
+            for (let i = 1; i < d.length; i++) {
+                const a = +d.slice(0, i), b = +d.slice(i);
+                if (d[i] !== '0' && a < b && b <= maxPage && (!best || b - a < best[1] - best[0])) best = [a, b];
+            }
+            return best;
+        };
+        // Index pages have more columns than textLines' two halves, so split each
+        // line into separate entries wherever there's a wide gap.
+        const entries = [];
+        const footer = page.getViewport({ scale: 1 }).height * 0.95;
+        for (const lines of await textLines(page)) {
+            for (const r of lines) {
+                if (r.y > footer) continue;
+                let seg = null;
+                r.items.forEach((it, k) => {
+                    const prev = r.items[k - 1];
+                    if (!prev || it.x - (prev.x + prev.w) > r.h * 1.5) entries.push(seg = { y: r.y, h: r.h, items: [] });
+                    seg.items.push(it);
+                });
+            }
+        }
+        const links = [];
+        for (const r of entries) {
+            // Estimate each character's x position within its text item.
+            let text = '';
+            const xs = [];
+            r.items.forEach((it, k) => {
+                const prev = r.items[k - 1];
+                if (prev && it.x - (prev.x + prev.w) > r.h * 0.2) { text += ' '; xs.push([it.x, it.x]); }
+                const chars = it.str.split('');
+                const total = measure.measureText(it.str).width || 1;
+                let acc = 0;
+                for (const ch of chars) {
+                    const cw = measure.measureText(ch).width;
+                    xs.push([it.x + it.w * acc / total, it.x + it.w * (acc + cw) / total]);
+                    acc += cw;
                 }
+                text += it.str;
+            });
+            // Name (absent on wrapped lines), then page numbers / ranges; the range
+            // dash may be any odd glyph.
+            const m = text.match(/^(?:(.*[a-z)\]'’.])\s+)?(\d[^a-z]*?)\s*$/i);
+            if (!m) continue;
+            const base = m[0].length - m[0].slice((m[1] || '').length).trimStart().length;
+            for (const t of m[2].matchAll(/\d[\d ]*(?:[^\d,\s]+\s*\d[\d ]*)?/g)) {
+                const parts = t[0].trim().split(/[^\d ]+/).map(p => p.replace(/ /g, ''));
+                const range = parts.length === 2 ? [+parts[0], +parts[1]] : asRange(parts[0]);
+                if (!range) continue;
+                const s = base + t.index, e = s + t[0].trimEnd().length - 1;
+                const x0 = xs[s][0], x1 = xs[e][1];
+                links.push({
+                    x: x0 - 2, y: r.y - r.h, w: x1 - x0 + 4, h: r.h * 1.3, target: range[0],
+                    label: range[0] === range[1] ? 'page ' + range[0] : `pages ${range[0]}–${range[1]}`,
+                });
             }
-            return links;
-        }).catch(() => []));
+        }
+        return links;
+    }
+
+    // Printed page range of the index, read from its entry on the contents page.
+    let indexRangeP = null;
+    function indexRange() {
+        if (!indexRangeP) indexRangeP = (async () => {
+            const all = [];
+            for (let n = 1; n <= OFFSET; n++) all.push(...await pageLinks(n));
+            const idx = all.find(l => /^index\b/i.test(l.text));
+            if (!idx) return null;
+            const later = all.map(l => l.target).filter(t => t > idx.target);
+            return [idx.target, Math.min(later.length ? Math.min(...later) - 1 : Infinity, idx.target + 5)];
+        })();
+        return indexRangeP;
+    }
+
+    function pageLinks(n) {
+        if (!linkCache.has(n)) linkCache.set(n, (async () => {
+            if (n <= OFFSET) return contentsLinks(await getPage(n));
+            const range = await indexRange();
+            if (!range || n - OFFSET < range[0] || n - OFFSET > range[1]) return [];
+            return indexLinks(await getPage(n));
+        })().catch(() => []));
         return linkCache.get(n);
     }
 
@@ -270,19 +369,20 @@
     async function goToContents() {
         if (!pdf) return;
         for (let n = 1; n <= OFFSET; n++) {
-            if ((await contentsLinks(n)).length) return goTo(n);
+            if ((await pageLinks(n)).length) return goTo(n);
         }
     }
 
-    function addContentsLinks(slot) {
-        contentsLinks(slot.n).then(links => {
+    function addLinks(slot) {
+        if (!OFFSET) return;
+        pageLinks(slot.n).then(links => {
             if (!links.length || !slots.includes(slot)) return;
             const { w, h } = sizeOf(slot.n);
             const layer = document.createElement('div');
             layer.className = 'links';
             for (const l of links) {
                 const a = document.createElement('a');
-                a.title = 'Go to page ' + l.target;
+                a.title = 'Go to ' + l.label;
                 a.style.cssText = `left:${l.x / w * 100}%;top:${l.y / h * 100}%;width:${l.w / w * 100}%;height:${l.h / h * 100}%`;
                 a.onclick = () => goTo(l.target + OFFSET);
                 layer.appendChild(a);
