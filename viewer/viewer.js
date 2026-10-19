@@ -19,6 +19,7 @@
 
     const ICON = {
         menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
+        contents: '<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
         prev: '<path d="M15 18l-6-6 6-6"/>',
         next: '<path d="M9 18l6-6-6-6"/>',
         zoomOut: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35M8 11h6"/>',
@@ -33,7 +34,8 @@
 
     document.getElementById('app').innerHTML = `
         <div class="bar">
-            <button class="ic" id="sideBtn" title="Contents / pages (T)">${svg('menu')}</button>
+            <button class="ic" id="sideBtn" title="Page thumbnails (T)">${svg('menu')}</button>
+            <button class="ic" id="contentsBtn" title="Go to contents (C)"${OFFSET ? '' : ' hidden'}>${svg('contents')}</button>
             <div class="title"></div>
             <div class="group page-group">
                 <button class="ic" id="prevBtn" title="Previous (←)">${svg('prev')}</button>
@@ -262,6 +264,14 @@
             return links;
         }).catch(() => []));
         return linkCache.get(n);
+    }
+
+    // The contents page is the first front page that has contents-style links.
+    async function goToContents() {
+        if (!pdf) return;
+        for (let n = 1; n <= OFFSET; n++) {
+            if ((await contentsLinks(n)).length) return goTo(n);
+        }
     }
 
     function addContentsLinks(slot) {
@@ -505,6 +515,7 @@
     $('fitBtn').onclick = () => setZoom(zoom === 'page' ? 'width' : 'page');
     $('spreadBtn').onclick = () => setTwoUp(!twoUp);
     $('sideBtn').onclick = () => toggleSide();
+    $('contentsBtn').onclick = goToContents;
     $('fullBtn').onclick = () => {
         if (document.fullscreenElement) document.exitFullscreen();
         else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen().catch(() => {});
@@ -543,6 +554,7 @@
         else if (k === 'w' || k === 'W') setZoom('width');
         else if (k === 'd' || k === 'D') setTwoUp(!twoUp);
         else if (k === 't' || k === 'T') toggleSide();
+        else if (k === 'c' || k === 'C') goToContents();
         else if (k === 'f' || k === 'F') $('fullBtn').click();
         else handled = false;
         if (handled) e.preventDefault();
