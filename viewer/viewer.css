@@ -174,15 +174,18 @@ svg {
     margin: auto;
     display: flex;
     flex: none;
-    gap: 3px;
     padding: 16px;
+}
+
+#sheet {
+    display: flex;
+    box-shadow: 0 2px 14px rgba(0, 0, 0, .55);
 }
 
 .page {
     flex: none;
     position: relative;
     background: #fff;
-    box-shadow: 0 2px 14px rgba(0, 0, 0, .55);
 }
 .page canvas {
     display: block;

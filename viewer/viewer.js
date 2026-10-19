@@ -10,7 +10,7 @@
     const STORE_KEY = 'pdfviewer:' + FILE;
     // Printed page number = PDF page − OFFSET; earlier pages get roman numerals.
     const OFFSET = +document.body.dataset.offset || 0;
-    const PAD = 16, GAP = 3;          // must match #spread padding / gap in CSS
+    const PAD = 16, GAP = 0;          // must match #spread padding / #sheet gap in CSS
     const MIN_ZOOM = 0.2, MAX_ZOOM = 8;
     const MAX_PIXELS = 16e6;          // canvas size cap (iOS limit is ~16.7M)
     const CACHE_PAGES = 10;           // rendered pages kept in memory
@@ -59,7 +59,7 @@
                 <div class="panel" id="thumbPanel"><div class="thumbs" id="thumbs"></div></div>
             </aside>
             <div class="view">
-                <div id="stage" tabindex="0"><div id="spread"></div></div>
+                <div id="stage" tabindex="0"><div id="spread"><div id="sheet"></div></div></div>
                 <button class="flip prev" id="flipPrev" title="Previous">${svg('prev')}</button>
                 <button class="flip next" id="flipNext" title="Next">${svg('next')}</button>
                 <div class="msg" id="msg">Loading…</div>
@@ -208,7 +208,7 @@
             if (cached) el.appendChild(cached.canvas); else el.classList.add('loading');
             return { n, el };
         });
-        spreadEl.replaceChildren(...slots.map(s => s.el));
+        $('sheet').replaceChildren(...slots.map(s => s.el));
     }
 
     function layout() {
